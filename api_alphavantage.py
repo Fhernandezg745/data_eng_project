@@ -1,69 +1,102 @@
-# import necessary libraries
-import pandas as pd
+# importo las librerias necesarias
+import os
 import requests
 import json
+from datetime import datetime
 from typing import Union, List
-
-# Configure API parameters
+import pandas as pd
+from dotenv import load_dotenv
+load_dotenv()
 
 #Advantage api configuration
-base_url = 'https://www.alphavantage.co/query'
-token = "OYDV8S8KFCSH3B35"
-#Parameters for stocks on market data
-function = 'TIME_SERIES_INTRADAY'
-symbol= 'AAPL'
-interval = '15min'
-adjusted=True
-month='2023-01'
-size = 'full'
+base_url = os.environ.get('BASE_URL')
+token = os.environ.get('API_TOKEN')
 
-#fix the params
-parameters_market_data = {'function':function, 'symbol':symbol, 'interval':interval, 
-            'adjusted':adjusted,'outputsize':size,'apikey':token, 'month':month, }
-#call the API 
-r = requests.get(base_url,params=parameters_market_data)
-#Pass the json response to pandas dataframe
-data = r.json()['Time Series (15min)']
-data_df = pd.DataFrame.from_dict(data, orient="index")
+#Primero: funcion para traer market data, en particular serie intradiaria del stock que necesito
+def intraday_stock_serie(symbol:str, interval:str):   
+    function = 'TIME_SERIES_INTRADAY'
+    adjusted=True
+    extended_hours=False
+    size = 'compact'
+    parameters_market_data = {'function':function, 'symbol':symbol, 'interval':interval, 'extended_hours':extended_hours,
+            'adjusted':adjusted,'outputsize':size,'apikey':token }
+    try:
+        r = requests.get(base_url, params=parameters_market_data)
+        r.raise_for_status()  
+        data = r.json()[f'Time Series ({interval})']
+        return data
+    except requests.exceptions.HTTPError as http_err:
+        print(f"error: {http_err}")
+        return {}
+    except Exception as err:
+        print(f"error: {err}")
+        return {}
 
-#function to retrieve news and sentiment analysis on the same symbol specified before
 
+#Segundo: funcion para traer noticias relacionadas a ese stock
 def getSentiment(
     symbol: str,
-    function_sentiment: str,
-    topics: Union[str, List[str]],
-    time_from: Union[str, int],
-    time_to: Union[str, int]
+    topics: Union[str, List[str]]
 ):
-    url = 'https://finnhub.io/api/v1/news-sentiment'
-    
-    # Convert topics to a comma-separated string if it is a list of strings
+    # Convierto topics en un solo string si vino en una lista de strings
     if isinstance(topics, list):
         topics = ','.join(topics)
-    
-    # Convert time_from and time_to to strings if they are integers
-    time_from = str(time_from)
-    time_to = str(time_to)
-    
+        
     parameters_news_sentiment_data = {
-        'function': function_sentiment,
+        'function': 'NEWS_SENTIMENT',
         'tickers': symbol,
         'topics': topics,
-        'time_from': time_from,
-        'time_to': time_to,
         'apikey': token
     }
-    r = requests.get(base_url, params=parameters_news_sentiment_data)
-    data = r.json()
-    data_feed = data['feed']
-    data_sentiment = []
-    for i in data_feed:
-        for item in i['ticker_sentiment']:
-            if item['ticker'] == symbol:
-                data_sentiment.append({
-                    'time_published': i['time_published'],
-                    'source_domain': i['source_domain'],
-                    'relevance_score': item['relevance_score'],
-                    'ticker_sentiment_label': item['ticker_sentiment_label']
-                })
-    return data_sentiment
+    
+    try:
+        r = requests.get(base_url, params=parameters_news_sentiment_data)
+        r.raise_for_status() 
+        data = r.json()
+        data_feed = data['feed']
+        data_sentiment = []
+        for i in data_feed:
+            for item in i['ticker_sentiment']:
+                if item['ticker'] == symbol:
+                    # Formateo time_published 
+                    time_published = datetime.strptime(i['time_published'], '%Y%m%dT%H%M%S')
+                    formatted_time_published = time_published.strftime('%Y-%m-%d %H:%M')
+                    data_sentiment.append({
+                        'ticker': item['ticker'],
+                        'time_published': formatted_time_published,
+                        'source_domain': i['source_domain'],
+                        'relevance_score': item['relevance_score'],
+                        'ticker_sentiment_label': item['ticker_sentiment_label']
+                    })
+        return data_sentiment
+    except requests.exceptions.HTTPError as http_err:
+        print(f"HTTP error occurred: {http_err}")
+        return []
+    except Exception as err:
+        print(f"Other error occurred: {err}")
+        return []
+
+
+# 3 Unifico las funciones de market data y news data en una sola 
+def get_stock_data(tickers, interval, topics):
+    stock_data_frames = {}
+    
+    for ticker in tickers:
+        # Traigo intraday stock data
+        intraday_data = intraday_stock_serie(ticker, interval)
+        
+        # Traigo sentiment data
+        sentiment_data = getSentiment(ticker, topics)
+        
+        # Convierto en pandas dataframe
+        df_intraday = pd.DataFrame(intraday_data).transpose()
+        df_intraday.index = pd.to_datetime(df_intraday.index)
+        df_sentiment = pd.DataFrame(sentiment_data)
+        
+        # Guardo los df en diccionarios
+        stock_data_frames[ticker] = {
+            'intraday_data': df_intraday,
+            'sentiment_data': df_sentiment
+        }
+    return stock_data_frames
+
