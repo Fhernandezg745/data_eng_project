@@ -25,3 +25,6 @@ Username: Admin
 Password: admin
 
 correr dags en airflow
+
+
+descargar archivo config.ini, crear un directorio dentro de la carpeta entrega_3 con el nombre de config y poner el archivo descargado
